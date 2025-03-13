@@ -1,0 +1,65 @@
+# EasyTrade Configuration
+
+# Data Provider Configuration
+data_provider:
+  type: csv
+  data_dir: data
+  date_format: '%Y-%m-%d %H:%M:%S'
+  timestamp_column: timestamp
+  ohlcv_columns:
+    open: open
+    high: high
+    low: low
+    close: close
+    volume: volume
+  replay_speed: 10.0
+
+# Execution Provider Configuration
+execution_provider:
+  type: backtest
+  initial_cash: 100000.0
+  commission_rate: 0.001
+
+# Risk Manager Configuration
+risk_manager:
+  max_position_size: 0.2
+  max_order_size: 0.1
+  max_concentration: 0.5
+  max_drawdown: 0.2
+
+# Strategy Configuration
+strategy:
+  type: moving_average_crossover
+  parameters:
+    short_window: 10
+    long_window: 50
+    position_size: 0.1
+
+# Symbols to Trade
+symbols:
+  - AAPL
+  - MSFT
+  - GOOGL
+
+# Backtest Configuration
+backtest:
+  start_date: 2023-01-01
+  end_date: 2023-12-31
+  interval: 1d
+
+# Logging Configuration
+logging:
+  level: INFO
+  file: logs/backtest.log
+  console: true
+
+# Output Configuration
+output:
+  directory: output
+  save_trades: true
+  save_portfolio: true
+  save_performance: true
+  plots:
+    equity_curve: true
+    drawdown: true
+    returns_distribution: true 
