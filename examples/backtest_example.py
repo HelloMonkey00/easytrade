@@ -1,188 +1,170 @@
 #!/usr/bin/env python
 """
-Example script to run a backtest using the EasyTrade framework.
+Backtest example using the EasyTrade framework.
+
+This example demonstrates how to:
+1. Load historical data
+2. Configure a strategy
+3. Run a backtest
+4. Analyze results
 """
+
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+import matplotlib.pyplot as plt
 import os
 import sys
-import logging
-import argparse
-import matplotlib.pyplot as plt
-from datetime import datetime, timedelta
 
-# Add parent directory to path to import easytrade
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+# Add the parent directory to the path to import easytrade modules
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from easytrade.core.engine import TradingEngine
-from easytrade.core.risk_manager import RiskManager
-from easytrade.data.csv_provider import CSVDataProvider
-from easytrade.execution.backtest import BacktestExecutionProvider
-from easytrade.strategies.moving_average import MovingAverageCrossoverStrategy
-from easytrade.utils.logger import setup_logger
-from easytrade.utils.performance import calculate_performance_metrics, plot_equity_curve, plot_drawdown
+from easytrade.runner import EasyTradeRunner
+from easytrade.strategies.momentum_strategy import MomentumStrategy
 
+def load_sample_data():
+    """
+    Load sample price data for SPY and SPX.
+    
+    In a real-world scenario, you would load your actual historical data.
+    
+    Returns:
+        Dictionary mapping symbol to DataFrame with OHLCV data
+    """
+    # Generate sample data for SPY with a slight upward trend
+    n_days = 60
+    dates = pd.date_range(start='2023-01-01', periods=n_days*78, freq='5min')
+    dates = dates[dates.indexer_between_time('9:30', '16:00')]  # Market hours only
+    
+    # Create SPY data
+    spy_base = 400.0  # Starting price
+    spy_trend = np.linspace(0, 5, len(dates))  # Overall upward trend
+    spy_cycle = 3.0 * np.sin(np.linspace(0, 8*np.pi, len(dates)))  # Cyclic pattern
+    spy_noise = np.random.normal(0, 1.0, len(dates))  # Random noise
+    
+    spy_price = spy_base + spy_trend + spy_cycle + spy_noise
+    
+    spy_data = pd.DataFrame({
+        'datetime': dates,
+        'open': spy_price,
+        'high': spy_price + np.random.uniform(0.1, 0.5, len(dates)),
+        'low': spy_price - np.random.uniform(0.1, 0.5, len(dates)),
+        'close': spy_price + np.random.uniform(-0.2, 0.2, len(dates)),
+        'volume': np.random.randint(10000, 100000, len(dates))
+    })
+    
+    # Create SPX data (similar pattern but 10x the value)
+    spx_base = 4000.0  # Starting price
+    spx_trend = np.linspace(0, 50, len(dates))  # Overall upward trend
+    spx_cycle = 30.0 * np.sin(np.linspace(0, 8*np.pi, len(dates)))  # Cyclic pattern
+    spx_noise = np.random.normal(0, 10.0, len(dates))  # Random noise
+    
+    spx_price = spx_base + spx_trend + spx_cycle + spx_noise
+    
+    spx_data = pd.DataFrame({
+        'datetime': dates,
+        'open': spx_price,
+        'high': spx_price + np.random.uniform(1.0, 5.0, len(dates)),
+        'low': spx_price - np.random.uniform(1.0, 5.0, len(dates)),
+        'close': spx_price + np.random.uniform(-2.0, 2.0, len(dates)),
+        'volume': np.random.randint(5000, 50000, len(dates))
+    })
+    
+    # Add some volatility events
+    # Create a few days with higher volatility
+    vol_periods = [
+        (300, 400),  # Period 1
+        (800, 900),  # Period 2
+        (1500, 1600)  # Period 3
+    ]
+    
+    for start, end in vol_periods:
+        # SPY volatility
+        spy_data.loc[start:end, 'high'] = spy_data.loc[start:end, 'open'] + np.random.uniform(0.5, 2.0, end-start+1)
+        spy_data.loc[start:end, 'low'] = spy_data.loc[start:end, 'open'] - np.random.uniform(0.5, 2.0, end-start+1)
+        spy_data.loc[start:end, 'close'] = spy_data.loc[start:end, 'open'] + np.random.uniform(-1.0, 1.0, end-start+1)
+        spy_data.loc[start:end, 'volume'] = np.random.randint(50000, 200000, end-start+1)
+        
+        # SPX volatility
+        spx_data.loc[start:end, 'high'] = spx_data.loc[start:end, 'open'] + np.random.uniform(5.0, 20.0, end-start+1)
+        spx_data.loc[start:end, 'low'] = spx_data.loc[start:end, 'open'] - np.random.uniform(5.0, 20.0, end-start+1)
+        spx_data.loc[start:end, 'close'] = spx_data.loc[start:end, 'open'] + np.random.uniform(-10.0, 10.0, end-start+1)
+        spx_data.loc[start:end, 'volume'] = np.random.randint(25000, 100000, end-start+1)
+    
+    return {
+        'SPY': spy_data,
+        'SPX': spx_data
+    }
 
-def parse_args():
-    """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description='Run a backtest using the EasyTrade framework')
+def run_backtest():
+    """Run a backtest using the momentum strategy."""
+    # Load sample data
+    print("Loading sample data...")
+    data = load_sample_data()
     
-    parser.add_argument('--data-dir', type=str, required=True,
-                       help='Directory containing CSV data files')
-    parser.add_argument('--symbols', type=str, nargs='+', required=True,
-                       help='Symbols to trade')
-    parser.add_argument('--short-window', type=int, default=10,
-                       help='Short-term moving average window')
-    parser.add_argument('--long-window', type=int, default=50,
-                       help='Long-term moving average window')
-    parser.add_argument('--position-size', type=float, default=0.1,
-                       help='Position size as a fraction of portfolio value')
-    parser.add_argument('--initial-cash', type=float, default=100000.0,
-                       help='Initial cash balance')
-    parser.add_argument('--commission-rate', type=float, default=0.001,
-                       help='Commission rate as a decimal')
-    parser.add_argument('--log-level', type=str, default='DEBUG',
-                       choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
-                       help='Logging level')
-    parser.add_argument('--output-dir', type=str, default='output',
-                       help='Directory to save output files')
+    # Print data stats
+    for symbol, df in data.items():
+        print(f"{symbol} data: {len(df)} bars, date range: {df['datetime'].min()} to {df['datetime'].max()}")
     
-    return parser.parse_args()
-
-
-def main():
-    """Run the backtest."""
-    # Parse command line arguments
-    args = parse_args()
+    # Create strategy with custom config
+    strategy_config = {
+        # Trading parameters
+        "position_size": 100,  # Number of shares to trade
+        "min_profit_target": 0.01,  # 1% profit target
+        "stop_loss": 0.005,  # 0.5% stop loss
+        "max_position_duration": 60,  # 1 hour max position duration
+        
+        # Momentum parameters
+        "momentum_threshold": 0.3,  # Lowered for more signals
+        "momentum_lookback": 15,  # Shortened lookback period
+        
+        # SPX parameters
+        "spx_consistency_threshold": 0.5,  # Lowered for more signals
+        "spx_consecutive_bars": 2,  # Lowered for more signals
+        
+        # Filters and entry conditions
+        "min_trade_spacing": 10,  # 10 minutes between trades
+        "max_daily_trades": 8,  # Increased max trades per day
+    }
     
-    # Set up logging
-    log_level = getattr(logging, args.log_level)
-    logger = setup_logger('backtest', log_level=log_level)
+    print("Creating momentum strategy...")
+    strategy = MomentumStrategy(strategy_config)
     
-    # Create output directory if it doesn't exist
-    if not os.path.exists(args.output_dir):
-        os.makedirs(args.output_dir)
-    
-    # Create components
-    data_provider = CSVDataProvider(args.data_dir)
-    execution_provider = BacktestExecutionProvider(
-        initial_cash=args.initial_cash,
-        commission_rate=args.commission_rate
-    )
-    risk_manager = RiskManager(
-        max_position_size=args.position_size * 2,  # Allow some flexibility
-        max_order_size=args.position_size * 2,
-        max_concentration=0.5,
-        max_drawdown=0.2
-    )
-    strategy = MovingAverageCrossoverStrategy(
-        short_window=args.short_window,
-        long_window=args.long_window,
-        position_size=args.position_size
-    )
-    
-    # Set symbols for strategy
-    strategy.set_symbols(args.symbols)
-    
-    # Create trading engine
-    engine = TradingEngine(
-        data_provider=data_provider,
-        execution_provider=execution_provider,
+    # Create runner in backtest mode
+    print("Setting up backtest...")
+    runner = EasyTradeRunner(mode="backtest")
+    runner.setup_backtest(
         strategy=strategy,
-        risk_manager=risk_manager
+        data=data,
+        initial_capital=100000.0,
+        commission=0.0005  # 0.05% commission
     )
     
-    # Set engine reference in risk manager
-    risk_manager.set_engine(engine)
+    # Run the backtest
+    print("Running backtest...")
+    results = runner.run()
     
-    # Load data
-    logger.info(f"Loading data from {args.data_dir}")
-    data_provider.load_directory()
+    # Print results
+    print("\nBacktest Results:")
+    print(f"Initial Capital: ${results['initial_value']:.2f}")
+    print(f"Final Value: ${results['final_value']:.2f}")
+    print(f"PnL: ${results['pnl']:.2f} ({results['pnl_pct']:.2f}%)")
     
-    # Check if data was loaded
-    if not data_provider._data:
-        logger.error("No data was loaded. Check if the data files exist and are in the correct format.")
-        for symbol in args.symbols:
-            file_path = os.path.join(args.data_dir, f"{symbol}.csv")
-            if os.path.exists(file_path):
-                logger.debug(f"File exists: {file_path}")
-                # Try to load the file explicitly
-                success = data_provider.load_csv_file(file_path, symbol)
-                logger.debug(f"Explicit load of {file_path}: {'Success' if success else 'Failed'}")
-            else:
-                logger.error(f"File does not exist: {file_path}")
+    # Plot results
+    print("\nGenerating plots...")
+    runner.plot(style='candle')
     
-    # Set replay speed (faster for backtesting)
-    data_provider.set_replay_speed(10.0)
-    
-    # Run backtest
-    logger.info("Starting backtest")
-    engine.run_backtest()
-    
-    # Get performance metrics
-    metrics = execution_provider.get_performance_metrics()
-    
-    # Print performance metrics
-    logger.info("Backtest completed")
-    logger.info(f"Initial cash: ${metrics['initial_cash']:.2f}")
-    logger.info(f"Final equity: ${metrics['final_equity']:.2f}")
-    logger.info(f"P&L: ${metrics['pnl']:.2f} ({metrics['pnl_percent']:.2f}%)")
-    logger.info(f"Number of trades: {metrics['num_trades']}")
-    logger.info(f"Win ratio: {metrics['win_ratio']:.2f}")
-    
-    # Create equity curve
-    equity_curve = []
-    timestamps = []
-    
-    # Reset data provider and execution provider
-    data_provider.reset()
-    execution_provider.reset()
-    
-    # Make sure engine is not running
-    if hasattr(engine, '_running') and engine._running:
-        logger.debug("Stopping engine before second run")
-        engine.stop()
-    
-    # Set up callback to record equity curve
-    def record_equity(data):
-        logger.debug(f"record_equity callback called with data for {len(data)} symbols")
-        portfolio = execution_provider.get_portfolio()
-        equity_curve.append(portfolio.equity)
-        timestamps.append(list(data.values())[0].timestamp if data else datetime.now())
-        logger.debug(f"Added equity point: {portfolio.equity} at {timestamps[-1]}")
-    
-    # Add callback to data provider
-    data_provider.add_subscriber(record_equity)
-    logger.debug("Added record_equity callback to data provider")
-    
-    # Run backtest again to record equity curve
-    logger.info("Running backtest again to record equity curve")
-    engine.run_backtest()
-    
-    # Check if we have any data points
-    if not timestamps:
-        logger.warning("No data points were recorded during the backtest. Cannot generate performance metrics or plots.")
-        return
-    
-    # Calculate additional performance metrics
-    days = (timestamps[-1] - timestamps[0]).days or 1
-    perf_metrics = calculate_performance_metrics(equity_curve, days)
-    
-    # Print additional performance metrics
-    logger.info(f"CAGR: {perf_metrics['cagr']:.2f}")
-    logger.info(f"Sharpe ratio: {perf_metrics['sharpe_ratio']:.2f}")
-    logger.info(f"Sortino ratio: {perf_metrics['sortino_ratio']:.2f}")
-    logger.info(f"Max drawdown: {perf_metrics['max_drawdown']:.2f}")
-    logger.info(f"Calmar ratio: {perf_metrics['calmar_ratio']:.2f}")
-    
-    # Plot equity curve
-    equity_plot = plot_equity_curve(equity_curve, timestamps)
-    equity_plot.savefig(os.path.join(args.output_dir, 'equity_curve.png'))
-    
-    # Plot drawdown
-    drawdown_plot = plot_drawdown(equity_curve, timestamps)
-    drawdown_plot.savefig(os.path.join(args.output_dir, 'drawdown.png'))
-    
-    logger.info(f"Plots saved to {args.output_dir}")
+    return results
 
-
-if __name__ == '__main__':
-    main() 
+if __name__ == "__main__":
+    print("EasyTrade Backtest Example")
+    print("==========================")
+    
+    try:
+        results = run_backtest()
+        print("\nBacktest completed successfully.")
+    except Exception as e:
+        print(f"\nError during backtest: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1) 
